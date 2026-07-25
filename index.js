@@ -13,8 +13,7 @@ const MASTER_KEY = "$2a$10$1LL03wxVJkypE56M6e0xmOkiTSjRcdoEj/upYKtl0iNvAY2knfyP6
 const OWNER_PHONE = "0945060772"; 
 
 const PRICELIST = {
-    'permanent': { name: '👑 คีย์ถาวร (Permanent)', price: 60, duration: 'permanent' },
-    '30d': { name: '⏳ คีย์ 30 วัน', price: 40, duration: '30d' }
+    'permanent': { name: '👑 คีย์ถาวร (Permanent)', price: 60, duration: 'permanent' }
 };
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
@@ -37,7 +36,7 @@ async function registerCommands() {
         new SlashCommandBuilder().setName('addkey').setDescription('🔑 [Admin] เติมคีย์จริงเข้าสต็อก')
             .addStringOption(opt => opt.setName('keys').setDescription('ใส่คีย์คั่นด้วยการเว้นวรรค').setRequired(true))
             .addStringOption(opt => opt.setName('duration').setDescription('ประเภทคีย์').setRequired(true)
-                .addChoices({name:'30 วัน',value:'30d'},{name:'ถาวร',value:'permanent'})),
+                .addChoices({name:'ถาวร',value:'permanent'})),
         new SlashCommandBuilder().setName('genpromo').setDescription('🎁 [Admin] สร้างโค้ดเติมพอยท์ฟรี')
             .addStringOption(opt => opt.setName('code').setDescription('ชื่อโค้ด').setRequired(true))
             .addIntegerOption(opt => opt.setName('points').setDescription('จำนวนพอยท์').setRequired(true))
@@ -59,8 +58,8 @@ async function getJsonBin() {
         const data = await res.json();
         let record = data.record || {};
         
-        // ตรวจสอบและสร้างโครงสร้างข้อมูลเพื่อป้องกันข้อผิดพลาด undefined
         if (!record.keys || typeof record.keys !== 'object') record.keys = {};
+        if (!record.soldKeys || typeof record.soldKeys !== 'object') record.soldKeys = {}; // โซนเก็บคีย์ที่ขายแล้ว
         if (!record.users || typeof record.users !== 'object') record.users = {};
         if (!Array.isArray(record.usedVouchers)) record.usedVouchers = [];
         if (!record.promocodes || typeof record.promocodes !== 'object') record.promocodes = {};
@@ -68,7 +67,7 @@ async function getJsonBin() {
         return record;
     } catch (e) {
         console.error('Error fetching JSONBin:', e);
-        return { keys: {}, users: {}, usedVouchers: [], promocodes: {} };
+        return { keys: {}, soldKeys: {}, users: {}, usedVouchers: [], promocodes: {} };
     }
 }
 
@@ -202,18 +201,29 @@ client.on('interactionCreate', async interaction => {
                 if (!db.users[userId]) db.users[userId] = { points: 0, history: [], keys: [], usedCodes: [] };
                 if (!db.users[userId].keys) db.users[userId].keys = [];
                 if (!db.users[userId].history) db.users[userId].history = [];
+                if (!db.soldKeys) db.soldKeys = {};
 
                 if (db.users[userId].points < product.price) return interaction.editReply({ content: `❌ พอยท์ไม่พอ ต้องการ ${product.price} บาท` });
 
                 let foundKey = null;
+                let keyData = null;
                 if (db.keys) {
                     for (const [k, v] of Object.entries(db.keys)) {
-                        if (v && v.duration === 'permanent') { foundKey = k; break; }
+                        if (v && v.duration === 'permanent') { 
+                            foundKey = k; 
+                            keyData = v;
+                            break; 
+                        }
                     }
                 }
                 if (!foundKey) return interaction.editReply({ content: `❌ ขออภัย สินค้าในบอทหมดสต็อกชั่วคราว` });
 
+                // ทำการย้ายคีย์: ลบออกจากคีย์พร้อมขาย เพื่อไม่ให้คนอื่นซื้อซ้ำ
                 delete db.keys[foundKey];
+                
+                // ย้ายมาเก็บในโซนที่ขายแล้ว (เพื่อให้ Script ในเกมยังสามารถมาอ่านตรวจคีย์และผ่านการตรวจสอบได้)
+                db.soldKeys[foundKey] = { status: "sold", buyer: userId, boughtAt: new Date().toLocaleString(), duration: keyData.duration };
+
                 db.users[userId].points -= product.price;
                 db.users[userId].keys.push(foundKey);
                 db.users[userId].history.push({ key: foundKey, time: new Date().toLocaleString() });
@@ -225,6 +235,24 @@ client.on('interactionCreate', async interaction => {
         }
     } catch (err) {
         console.error('🛡️ ตรวจพบข้อผิดพลาด:', err);
+    }
+});
+
+// หน้าเว็บ API สำหรับให้ตัวสคริปต์ในเกมดึงข้อมูลไปเช็คคีย์
+app.get('/check-key', async (req, res) => {
+    const targetKey = req.query.key;
+    if (!targetKey) return res.json({ valid: false, message: "Missing key parameter" });
+
+    const db = await getJsonBin();
+    
+    // ตรวจสอบคีย์ทั้งในคลังพร้อมขาย (keys) และคลังที่ถูกซื้อไปแล้ว (soldKeys)
+    const inStock = db.keys && db.keys[targetKey];
+    const isSold = db.soldKeys && db.soldKeys[targetKey];
+
+    if (inStock || isSold) {
+        return res.json({ valid: true, duration: (inStock ? db.keys[targetKey].duration : db.soldKeys[targetKey].duration) });
+    } else {
+        return res.json({ valid: false, message: "Key not found" });
     }
 });
 
