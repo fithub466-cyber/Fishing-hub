@@ -52,13 +52,19 @@ async function registerCommands() {
 
 async function getJsonBin() {
     try {
-        const res = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}/latest`, { method: 'GET', headers: { 'X-Master-Key': MASTER_KEY } });
+        const res = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}/latest`, { 
+            method: 'GET', 
+            headers: { 'X-Master-Key': MASTER_KEY } 
+        });
         const data = await res.json();
         let record = data.record || {};
+        
+        // ตรวจสอบและสร้างโครงสร้างข้อมูลเพื่อป้องกันข้อผิดพลาด undefined
         if (!record.keys || typeof record.keys !== 'object') record.keys = {};
         if (!record.users || typeof record.users !== 'object') record.users = {};
         if (!Array.isArray(record.usedVouchers)) record.usedVouchers = [];
         if (!record.promocodes || typeof record.promocodes !== 'object') record.promocodes = {};
+        
         return record;
     } catch (e) {
         console.error('Error fetching JSONBin:', e);
@@ -128,8 +134,10 @@ client.on('interactionCreate', async interaction => {
                 const targetUser = options.getUser('user');
                 const amount = options.getInteger('amount');
                 const db = await getJsonBin();
+                
                 if (!db.users[targetUser.id]) db.users[targetUser.id] = { points: 0, history: [], keys: [], usedCodes: [] };
                 db.users[targetUser.id].points += amount;
+                
                 if (await updateJsonBin(db)) return interaction.editReply({ content: `✅ เติมพอยท์ให้ <@${targetUser.id}> สำเร็จ **+${amount} พอยท์**` });
             }
             if (commandName === 'addkey') {
@@ -181,6 +189,7 @@ client.on('interactionCreate', async interaction => {
                 if (!db.users) db.users = {};
                 if (!db.users[userId]) db.users[userId] = { points: 0, history: [], keys: [], usedCodes: [] };
                 const user = db.users[userId];
+                
                 if (!user.keys || user.keys.length === 0) return interaction.reply({ content: `🔑 คุณยังไม่มีคีย์ช็อปนี้`, ephemeral: true });
                 return interaction.reply({ content: `🔑 **คีย์ของคุณทั้งหมด:**\n${user.keys.map((k, i) => `${i+1}. \`${k}\``).join('\n')}`, ephemeral: true });
             }
